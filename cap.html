@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-select=none">
+    <title>Titan Supreme: Zero Friction</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Arial Black', sans-serif; color: white; touch-action: none; }
+        canvas { display: block; }
+        #ui { position: absolute; width: 100%; height: 100%; pointer-events: none; display: flex; align-items: center; justify-content: center; flex-direction: column; z-index: 100; }
+        .menu { background: rgba(0, 5, 20, 0.95); padding: 30px; border: 3px solid #0ff; border-radius: 20px; text-align: center; pointer-events: auto; box-shadow: 0 0 40px #0ff; width: 85%; max-width: 400px; }
+        button { padding: 15px; font-size: 18px; font-weight: bold; border: 2px solid #0ff; background: rgba(0,255,255,0.1); color: #0ff; cursor: pointer; border-radius: 12px; width: 100%; margin-top: 15px; }
+        #hud { position: absolute; top: 15px; left: 15px; z-index: 50; display: none; background: rgba(0,0,0,0.8); padding: 12px; border-radius: 10px; border-left: 5px solid #0ff; pointer-events: none; font-size: 12px; }
+        #boss-ui { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); width: 75%; display: none; text-align: center; z-index: 60; }
+        #boss-hp-bar { width: 100%; height: 15px; background: #300; border: 2px solid #f00; border-radius: 10px; overflow: hidden; }
+        #boss-hp-fill { width: 100%; height: 100%; background: linear-gradient(90deg, #f00, #ff4444); }
+        .btn-game { position: absolute; bottom: 30px; width: 80px; height: 80px; border-radius: 50%; display: none; z-index: 100; pointer-events: auto; align-items: center; justify-content: center; font-weight: bold; cursor: pointer; text-align: center; font-size: 12px; background: rgba(0,0,0,0.6); }
+        #mode-btn { right: 30px; border: 4px solid #ff0; color: #ff0; box-shadow: 0 0 15px #ff0; }
+        #bomb-btn { left: 30px; border: 4px solid #f00; color: #f44; box-shadow: 0 0 15px #f00; }
+        #flash { position: absolute; width: 100%; height: 100%; background: white; display: none; z-index: 200; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+<div id="flash"></div>
+<div id="ui">
+    <div id="start-menu" class="menu">
+        <h1 style="color:#0ff; margin:0; text-shadow: 0 0 10px #0ff;">TITAN SUPREME</h1>
+        <p style="font-size: 12px;">5 WEAPONS MODES UNLOCKED</p>
+        <button id="start-btn">ENGAGE MISSION</button>
+    </div>
+    <div id="game-over" class="menu" style="display:none;">
+        <h1 style="color:#f44;">MISSION FAILED</h1>
+        <button onclick="location.reload()">REPAIR & RETRY</button>
+    </div>
+</div>
+
+<div id="hud">
+    <div id="score">SCORE: 0000</div>
+    <div id="lives" style="color:#f44;">HULL: ♥♥♥♥♥</div>
+    <div id="bombs" style="color:#fa0;">NUKE: 💣💣💣</div>
+    <div id="wpn" style="color:#ff0;">MODE: SPREAD (Lv.1)</div>
+</div>
+
+<div id="boss-ui">
+    <div style="color:red; font-size:12px; font-weight:bold; text-shadow:0 0 5px #000;">BOSS DETECTED</div>
+    <div id="boss-hp-bar"><div id="boss-hp-fill"></div></div>
+</div>
+
+<div id="mode-btn" class="btn-game">CHANGE<br>MODE</div>
+<div id="bomb-btn" class="btn-game">TITAN<br>NUKE</div>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+let gameRunning = false;
+let player, bullets, enemies, enemyBullets, stars, powerups, particles, boss;
+let score = 0, lives = 5, bombs = 3, weaponLevel = 1, weaponMode = 'spread', screenShake = 0, shieldActive = 0;
+
+function triggerFlash() {
+    const f = document.getElementById("flash");
+    f.style.display = "block"; f.style.opacity = 1;
+    let fade = setInterval(() => { f.style.opacity -= 0.1; if(f.style.opacity <= 0) { f.style.display="none"; clearInterval(fade); }}, 30);
+}
+
+// --- HD DRAWING ---
+function drawPlayer(x, y) {
+    ctx.save(); ctx.translate(x, y);
+    if(shieldActive > 0) {
+        ctx.strokeStyle = "#0ff"; ctx.lineWidth = 3;
+        ctx.shadowBlur = 15; ctx.shadowColor = "#0ff";
+        ctx.beginPath(); ctx.arc(0, 0, 45, 0, Math.PI*2); ctx.stroke();
+    }
+    // Ship Engine Glow
+    ctx.fillStyle = "#fff"; ctx.beginPath();
+    ctx.moveTo(0, -35); ctx.lineTo(-25, 15); ctx.lineTo(0, 5); ctx.lineTo(25, 15); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#0ff"; ctx.fillRect(-20, 5, 6, 15); ctx.fillRect(14, 5, 6, 15);
+    ctx.restore();
+}
+
+function drawEnemy(e) {
+    ctx.save(); ctx.translate(e.x, e.y);
+    let color = e.t === 'f' ? "#f44" : "#a4f";
+    ctx.fillStyle = color; ctx.strokeStyle = "#fff";
+    ctx.beginPath();
+    if(e.t === 'f') { // Fighter Sprite
+        ctx.moveTo(0, 25); ctx.lineTo(-18, -10); ctx.lineTo(0, 0); ctx.lineTo(18, -10);
+    } else { // Bomber Sprite
+        ctx.moveTo(-25, -10); ctx.lineTo(25, -10); ctx.lineTo(15, 20); ctx.lineTo(-15, 20);
+    }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.restore();
+}
+
+// --- GAME LOGIC ---
+function startGame() {
+    document.getElementById("start-menu").style.display = "none";
+    document.getElementById("hud").style.display = "block";
+    document.querySelectorAll(".btn-game").forEach(b => b.style.display = "flex");
+    
+    player = { x: canvas.width/2, y: canvas.height-120 };
+    bullets = []; enemies = []; enemyBullets = []; powerups = []; particles = []; stars = [];
+    boss = { active: false, hp: 0, maxHp: 600, x: canvas.width/2, y: -200, laserTimer: 0 };
+    score = 0; lives = 5; bombs = 3; weaponLevel = 1; weaponMode = 'spread'; shieldActive = 0;
+    
+    for(let i=0; i<60; i++) stars.push({ x: Math.random()*canvas.width, y: Math.random()*canvas.height, v: Math.random()*4+1 });
+    
+    gameRunning = true;
+    updateHUD();
+    
+    setInterval(() => { if(gameRunning && weaponMode !== 'laser') spawnBullet(); }, 140);
+    setInterval(() => { if(gameRunning && !boss.active) spawnEnemy(); }, 700);
+    setInterval(() => { if(gameRunning) enemies.forEach(e => { if(Math.random()<0.3) enemyBullets.push({x:e.x, y:e.y+20, v:6}); }); }, 1100);
+    
+    requestAnimationFrame(gameLoop);
+}
+
+function spawnBullet() {
+    let count = Math.min(weaponLevel, 12); // Visual limit for performance
+    let startX = player.x - ((count-1) * 10) / 2;
+    for(let i=0; i<count; i++) {
+        let vx = 0, color = "#ff0";
+        if(weaponMode === 'spread') vx = (i - (count-1)/2) * 2;
+        if(weaponMode === 'focus') { vx = (i - (count-1)/2) * 0.2; color = "#fff"; }
+        if(weaponMode === 'wave') color = "#0ff";
+        if(weaponMode === 'homing') color = "#f0f";
+        bullets.push({ x: startX + (i*10), y: player.y - 30, vx: vx, vy: -15, mode: weaponMode, color: color });
+    }
+}
+
+function spawnEnemy() {
+    enemies.push({ x: Math.random()*(canvas.width-60)+30, y: -50, v: 2.5+(score/250), t: Math.random()>0.35?'f':'b' });
+}
+
+function updateHUD() {
+    document.getElementById("score").innerText = "SCORE: " + score.toString().padStart(4, '0');
+    document.getElementById("lives").innerText = "HULL: " + "♥".repeat(Math.max(0, lives));
+    document.getElementById("bombs").innerText = "NUKE: " + "💣".repeat(bombs);
+    let colors = { spread:'#ff0', focus:'#fff', wave:'#0ff', homing:'#f0f', laser:'#0ff' };
+    let wEl = document.getElementById("wpn");
+    wEl.innerText = `MODE: ${weaponMode.toUpperCase()} (Lv.${weaponLevel})`;
+    wEl.style.color = colors[weaponMode];
+    if(boss.active) document.getElementById("boss-hp-fill").style.width = (boss.hp/boss.maxHp*100) + "%";
+}
+
+function gameLoop() {
+    if(!gameRunning) return;
+    ctx.fillStyle = "#000815"; ctx.fillRect(0,0,canvas.width,canvas.height);
+    
+    if(screenShake > 0) { ctx.translate(Math.random()*8-4, Math.random()*8-4); screenShake--; }
+
+    stars.forEach(s => { s.y += s.v; if(s.y > canvas.height) s.y = 0; ctx.fillStyle="white"; ctx.fillRect(s.x, s.y, 1.5, 1.5); });
+
+    // Boss Logic
+    if(score > 0 && score % 100 === 0 && !boss.active) {
+        boss.active = true; boss.hp = boss.maxHp + (score * 2); boss.maxHp = boss.hp;
+        boss.y = -150; document.getElementById("boss-ui").style.display = "block";
+        score += 1;
+    }
+
+    if(boss.active) {
+        if(boss.y < 120) boss.y += 1.5;
+        boss.x = canvas.width/2 + Math.sin(Date.now()/1200) * 120;
+        // Draw Boss Sprite
+        ctx.fillStyle = "#222"; ctx.strokeStyle = boss.laserTimer > 150 ? "#f00" : "#ff0";
+        ctx.lineWidth = 4; ctx.strokeRect(boss.x-80, boss.y-30, 160, 60); ctx.fillRect(boss.x-80, boss.y-30, 160, 60);
+        boss.laserTimer++;
+        if(boss.laserTimer > 180) {
+            ctx.fillStyle = "rgba(255,0,0,0.6)"; ctx.fillRect(boss.x-35, boss.y+30, 70, canvas.height);
+            if(Math.abs(player.x - boss.x) < 45) { if(shieldActive>0) shieldActive=0; else lives -= 0.05; updateHUD(); }
+            if(boss.laserTimer > 230) boss.laserTimer = 0;
+        }
+    }
+
+    // MEGA LASER PLAYER (No Friction)
+    if(weaponMode === 'laser') {
+        let lWidth = 12 + (weaponLevel);
+        let grad = ctx.createLinearGradient(player.x-lWidth, 0, player.x+lWidth, 0);
+        grad.addColorStop(0, "rgba(0,255,255,0)"); grad.addColorStop(0.5, "rgba(0,255,255,0.8)"); grad.addColorStop(1, "rgba(0,255,255,0)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(player.x - lWidth, 0, lWidth*2, player.y - 30);
+        
+        enemies.forEach((e, i) => {
+            if(Math.abs(e.x - player.x) < lWidth + 20) {
+                enemies.splice(i, 1); score++; updateHUD();
+                for(let k=0; k<5; k++) particles.push({x:e.x, y:e.y, vx:Math.random()*4-2, vy:Math.random()*4-2, l:1, c:'#0ff'});
+            }
+        });
+        if(boss.active && Math.abs(boss.x - player.x) < lWidth + 50) {
+            boss.hp -= 2; updateHUD();
+            if(boss.hp <= 0) { boss.active = false; score += 50; document.getElementById("boss-ui").style.display = "none"; triggerFlash(); }
+        }
+    }
+
+    drawPlayer(player.x, player.y);
+
+    // Bullets
+    bullets.forEach((b, i) => {
+        if(b.mode === 'wave') b.x += Math.sin(b.y / 35) * 12;
+        if(b.mode === 'homing') {
+            let t = enemies[0] || (boss.active ? boss : null);
+            if(t) { b.vx += (t.x - b.x) * 0.1; b.vy += (t.y - b.y) * 0.1; }
+        }
+        b.x += b.vx || 0; b.y += b.vy || -14;
+        ctx.fillStyle = b.color;
+        ctx.fillRect(b.x-2, b.y, 5, 18);
+
+        if(boss.active && Math.hypot(b.x-boss.x, b.y-boss.y) < 80) {
+            boss.hp -= (b.mode==='focus'?4:2); bullets.splice(i, 1);
+            if(boss.hp <= 0) { boss.active = false; score += 50; document.getElementById("boss-ui").style.display = "none"; triggerFlash(); }
+            updateHUD();
+        }
+        if(b.y < -50 || b.y > canvas.height+50) bullets.splice(i,1);
+    });
+
+    // Enemies Collision
+    enemies.forEach((e, i) => {
+        e.y += e.v; drawEnemy(e);
+        bullets.forEach((b, j) => {
+            if(Math.hypot(e.x-b.x, e.y-b.y) < 30) {
+                enemies.splice(i, 1); bullets.splice(j, 1);
+                score++; updateHUD();
+                if(Math.random()<0.18) powerups.push({x:e.x, y:e.y, t: Math.random()>0.7?'S':(Math.random()>0.5?'W':'B')});
+            }
+        });
+        if(Math.hypot(e.x-player.x, e.y-player.y) < 35) { 
+            if(shieldActive > 0) shieldActive = 0; else lives--; 
+            enemies.splice(i, 1); updateHUD(); screenShake = 15;
+        }
+        if(e.y > canvas.height+50) enemies.splice(i, 1);
+    });
+
+    // Enemy Bullets
+    enemyBullets.forEach((eb, i) => {
+        eb.y += eb.v; ctx.fillStyle = "#ff0"; ctx.beginPath(); ctx.arc(eb.x, eb.y, 6, 0, Math.PI*2); ctx.fill();
+        if(Math.hypot(eb.x-player.x, eb.y-player.y) < 25) { 
+            if(shieldActive > 0) shieldActive = 0; else lives--; 
+            enemyBullets.splice(i, 1); updateHUD(); 
+        }
+        if(eb.y > canvas.height) enemyBullets.splice(i, 1);
+    });
+
+    // Powerups & Particles
+    powerups.forEach((p, i) => {
+        p.y += 3; ctx.fillStyle = p.t==='W'?'#0ff':(p.t==='S'?'#0f0':'#f44');
+        ctx.font="bold 20px Arial"; ctx.fillText(p.t, p.x-10, p.y);
+        if(Math.hypot(p.x-player.x, p.y-player.y) < 40) {
+            if(p.t==='W') weaponLevel = Math.min(40, weaponLevel+1);
+            else if(p.t==='S') shieldActive = 1;
+            else bombs++;
+            powerups.splice(i, 1); updateHUD();
+        }
+    });
+    particles.forEach((p, i) => { 
+        p.x+=p.vx; p.y+=p.vy; p.l-=0.03; ctx.fillStyle=p.c; ctx.globalAlpha=p.l; ctx.fillRect(p.x, p.y, 3, 3); ctx.globalAlpha=1;
+        if(p.l<=0) particles.splice(i,1); 
+    });
+
+    if(lives <= 0) { gameRunning = false; document.getElementById("game-over").style.display = "block"; triggerFlash(); }
+    ctx.setTransform(1,0,0,1,0,0);
+    requestAnimationFrame(gameLoop);
+}
+
+// --- Controls ---
+canvas.onmousemove = (e) => player.x = e.clientX;
+canvas.ontouchmove = (e) => { player.x = e.touches[0].clientX; e.preventDefault(); };
+document.getElementById("start-btn").onclick = startGame;
+document.getElementById("mode-btn").onclick = () => {
+    const modes = ['spread', 'focus', 'wave', 'homing', 'laser'];
+    weaponMode = modes[(modes.indexOf(weaponMode) + 1) % modes.length];
+    updateHUD();
+};
+document.getElementById("bomb-btn").onclick = () => {
+    if(bombs > 0 && gameRunning) { bombs--; screenShake = 40; triggerFlash(); enemies = []; enemyBullets = []; if(boss.active) boss.hp -= 100; updateHUD(); }
+};
+</script>
+</body>
+</html>
